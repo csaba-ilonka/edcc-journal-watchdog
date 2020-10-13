@@ -16,7 +16,8 @@ class EDCCMainframeClient:
         self.__url = f"http://{host}:{port}"
 
     def journalEvent(self, fileName: str, payload):
-        return self.__post(f"journal?name={fileName}", json.dumps(payload))
+        print(f"Journal Event -> {fileName}")
+        return self.__post(f"journal/?name={fileName}", json.dumps(payload))
 
     def cargoEvent(self, payload):
         return self.__post('journal/cargo', payload)
@@ -80,7 +81,7 @@ class JournalEventHandler(FileSystemEventHandler):
         try:
             payload = Path(filePath).read_text()
             if fileName.startswith('Journal') and fileName.endswith('.log'):
-                self.client.journalEvent(fileName, json.dumps(payload))
+                self.client.journalEvent(fileName, payload)
             elif fileName == 'Cargo.json':
                 self.client.cargoEvent(json.loads(json.dumps(payload)))
             elif fileName == 'Market.json':
@@ -94,7 +95,7 @@ class JournalEventHandler(FileSystemEventHandler):
             elif fileName == 'Shipyard.json':
                 self.client.shipyardEvent(json.loads(json.dumps(payload)))
             elif fileName == 'Status.json':
-                self.client.cargoEvent(json.loads(json.dumps(payload)))
+                self.client.statusEvent(json.loads(json.dumps(payload)))
             else:
                 print(f"Unhandled file: {fileName}")
         except Exception as e:
@@ -102,7 +103,9 @@ class JournalEventHandler(FileSystemEventHandler):
 
 def main():
 
-    config = json.loads(Path('config.json').read_text())
+    # Workaround so that the wachdog can be launched from PyCharm as well as a standalone script.
+    configPath = Path('config.json') if Path('config.json').exists() else Path('../config.json')
+    config = json.loads(configPath.read_text())
     print(json.dumps(config, indent=2))
 
     host = config['client']['host']
