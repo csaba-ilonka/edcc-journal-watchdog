@@ -1,11 +1,12 @@
 {
-  "client": {
+  "api": {
     "host": "localhost",
     "port": 8080
   },
   "watchdog": {
     "directory": "%userprofile%/Saved Games/Frontier Developments/Elite Dangerous",
     "threadPoolSize": 4,
-    "tolerance": 100
+    "tolerance": 100,
+    "refreshPeriod": 100
   }
 }

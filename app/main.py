@@ -1,6 +1,7 @@
 import json
-import ntpath
 import os
+import threading
+import time
 from concurrent.futures.thread import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,11 +10,13 @@ import requests
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+import app
+
 
 class EDCCMainframeClient:
 
     def __init__(self, host: str = 'localhost', port: int = 8080):
-        self.__url = f"http://{host}:{port}"
+        self.url = f"http://{host}:{port}"
 
     def journalEvent(self, fileName: str, payload):
         print(f"Journal Event -> {fileName}")
@@ -40,47 +43,55 @@ class EDCCMainframeClient:
     def statusEvent(self, payload):
         return self.__post('journal/status', payload)
 
-    def __post(self, endpoint: str, payload):
-        requests.post(f"{self.__url}/{endpoint}", data=payload, headers={'Content-type': 'application/json', 'Accept': 'application/json'})
-
+    def __post(self, endpoint: str, payload: str):
+        url = f"{self.url}/{endpoint}"
+        try:
+            requests.post(url, data=payload, headers={'Content-type': 'application/json', 'Accept': 'application/json'})
+        except Exception as ex:
+            print(f"Failed to publish payload to '{url}' -> {ex}")
 
 class JournalEventHandler(FileSystemEventHandler):
 
-    def __init__(self, client: EDCCMainframeClient, threadPoolSize: int = 4, tolerance: int = 100):
-        self.threadPool = ThreadPoolExecutor(max_workers=threadPoolSize)
-        self.tolerance = timedelta(milliseconds=tolerance)
+    def __init__(self, client: EDCCMainframeClient):
+        self.threadPool = ThreadPoolExecutor(max_workers=app.WATCHDOG_THREAD_POOL_SIZE)
+        self.tolerance = timedelta(milliseconds=app.WATCHDOG_FS_EVENT_TOLERANCE)
         self.lastOnCreatedEvent = datetime.now()
         self.lastOnModifiedEvent = datetime.now()
         self.client = client
 
     def on_created(self, event):
-        if self.shouldProcessEvent(event, self.lastOnCreatedEvent):
-            self.threadPool.submit(self.processEvent, event.src_path)
+        path = app.pathify(event.src_path)
+        print(f"on_created :: {datetime.now()} -> {path}")
+        if self.shouldProcessEvent(path, self.lastOnCreatedEvent):
+            self.threadPool.submit(self.processEvent, path)
         self.lastOnCreatedEvent = datetime.now()
 
     def on_modified(self, event):
-        if self.shouldProcessEvent(event, self.lastOnModifiedEvent):
-            self.threadPool.submit(self.processEvent, event.src_path)
+        path = app.pathify(event.src_path)
+        print(f"on_modified :: {datetime.now()} -> {path}")
+        if self.shouldProcessEvent(path, self.lastOnModifiedEvent):
+            self.threadPool.submit(self.processEvent, path)
         self.lastOnModifiedEvent = datetime.now()
 
     def on_deleted(self, event):
-        print(f"Deleted {event.src_path}")
+        path = app.pathify(event.src_path)
+        print(f"on_deleted :: {path}")
 
-    def shouldProcessEvent(self, event, lastProcessed: datetime):
+    def shouldProcessEvent(self, path: Path, lastProcessed: datetime):
         if datetime.now() - lastProcessed > self.tolerance:
             return False
-        if not Path(event.src_path).exists():
+        if not path.exists():
             return False
-        if os.stat(event.src_path).st_size == 0:
+        if os.stat(path).st_size == 0:
             return False
         return True
 
-    def processEvent(self, filePath: str):
-        filePath = str(Path(filePath).absolute())  # Unify potentially mixed, platform dependent path separators
-        fileName = ntpath.basename(filePath)
+    def processEvent(self, file: Path):
+        print(f"{datetime.now()} -> {file}")
+        fileName = file.name
         try:
-            payload = Path(filePath).read_text()
-            if fileName.startswith('Journal') and fileName.endswith('.log'):
+            payload = file.read_text()
+            if fileName.startswith('Journal.') and fileName.endswith('.log'):
                 self.client.journalEvent(fileName, payload)
             elif fileName == 'Cargo.json':
                 self.client.cargoEvent(json.loads(json.dumps(payload)))
@@ -101,33 +112,41 @@ class JournalEventHandler(FileSystemEventHandler):
         except Exception as e:
             print(e)
 
+class JournalDirectoryObserver(Observer):
+    def __init__(self):
+        super().__init__()
+        api = EDCCMainframeClient(host=app.API_HOST, port=app.API_PORT)
+        handler = JournalEventHandler(api)
+        self.schedule(handler, path=app.WATCHDOG_JOURNAL_DIRECTORY, recursive=False)
+        self.__refreshThread = threading.Thread(target=self.__refreshJournalDirectory)
+
+    def start(self):
+        super().start()
+        self.__refreshThread.start()
+        print('WatchDog started')
+
+    def stop(self):
+        super().stop()
+        self.join(timeout=2)
+        self.__refreshThread.join(timeout=2)
+        print('WatchDog stopped')
+
+    def __refreshJournalDirectory(self):
+        cycle = app.WATCHDOG_REFRESH_PERIOD / 1000
+        print('Journal refresh thread started')
+        while self.is_alive():
+            os.listdir(path=app.WATCHDOG_JOURNAL_DIRECTORY)
+            time.sleep(cycle)
+        print('Journal refresh thread stopped')
+
 def main():
 
-    # Workaround so that the wachdog can be launched from PyCharm as well as a standalone script.
-    configPath = Path('config.json') if Path('config.json').exists() else Path('../config.json')
-    config = json.loads(configPath.read_text())
-    print(json.dumps(config, indent=2))
-
-    host = config['client']['host']
-    port = config['client']['port']
-    directory = config['watchdog']['directory']
-    threadPoolSize = config['watchdog']['threadPoolSize']
-    tolerance = config['watchdog']['tolerance']
-
-    client = EDCCMainframeClient(host=host, port=port)
-    handler = JournalEventHandler(client, threadPoolSize=threadPoolSize, tolerance=tolerance)
-
-    observer = Observer()
-    observer.schedule(handler, path=ntpath.expandvars(directory), recursive=False)
-
+    observer = JournalDirectoryObserver()
     observer.start()
-    print('WatchDog started')
-    input('Press Enter to exit...')
+
+    input('Press Enter to exit...\n')
 
     observer.stop()
-    print('WatchDog stopped')
-
-    observer.join(timeout=2)
 
 if __name__ == "__main__":
     main()
