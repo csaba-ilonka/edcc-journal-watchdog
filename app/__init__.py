@@ -10,7 +10,6 @@ print(json.dumps(config, indent=2))
 
 API_HOST = config['api']['host']
 API_PORT = config['api']['port']
-API_ERROR_QUEUE_SIZE = config['api']['errorQueueSize']
 
 def pathify(path: str) -> Path:
     """
