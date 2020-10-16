@@ -19,8 +19,7 @@ class EDCCMainframeClient:
         self.url = f"http://{host}:{port}"
 
     def journalEvent(self, fileName: str, payload):
-        print(f"Journal Event -> {fileName}")
-        return self.__post(f"journal/?name={fileName}", json.dumps(payload))
+        return self.__post(f"journal/?name={fileName}", payload)
 
     def cargoEvent(self, payload):
         return self.__post('journal/cargo', payload)
@@ -45,6 +44,7 @@ class EDCCMainframeClient:
 
     def __post(self, endpoint: str, payload: str):
         url = f"{self.url}/{endpoint}"
+        print(f"api :: {datetime.now()} -> {url}")
         try:
             requests.post(url, data=payload, headers={'Content-type': 'application/json', 'Accept': 'application/json'})
         except Exception as ex:
@@ -84,33 +84,46 @@ class JournalEventHandler(FileSystemEventHandler):
             return False
         if os.stat(path).st_size == 0:
             return False
+        if path.name.startswith('Journal') and not path.name.endswith('.log'):
+            return False
         return True
 
     def processEvent(self, file: Path):
-        print(f"{datetime.now()} -> {file}")
+        print(f"process_event :: {datetime.now()} -> {file}")
         fileName = file.name
         try:
             payload = file.read_text()
             if fileName.startswith('Journal.') and fileName.endswith('.log'):
                 self.client.journalEvent(fileName, payload)
-            elif fileName == 'Cargo.json':
-                self.client.cargoEvent(json.loads(json.dumps(payload)))
-            elif fileName == 'Market.json':
-                self.client.marketEvent(json.loads(json.dumps(payload)))
-            elif fileName == 'ModulesInfo.json':
-                self.client.modulesEvent(json.loads(json.dumps(payload)))
-            elif fileName == 'NavRoute.json':
-                self.client.routeEvent(json.loads(json.dumps(payload)))
-            elif fileName == 'Outfitting.json':
-                self.client.outfittingEvent(json.loads(json.dumps(payload)))
-            elif fileName == 'Shipyard.json':
-                self.client.shipyardEvent(json.loads(json.dumps(payload)))
-            elif fileName == 'Status.json':
-                self.client.statusEvent(json.loads(json.dumps(payload)))
             else:
-                print(f"Unhandled file: {fileName}")
+                validatedPayload = self.__validateJson(payload)
+                if fileName == 'Status.json':
+                    self.client.statusEvent(validatedPayload)
+                elif fileName == 'Cargo.json':
+                    self.client.cargoEvent(validatedPayload)
+                elif fileName == 'Market.json':
+                    self.client.marketEvent(validatedPayload)
+                elif fileName == 'ModulesInfo.json':
+                    self.client.modulesEvent(validatedPayload)
+                elif fileName == 'NavRoute.json':
+                    self.client.routeEvent(validatedPayload)
+                elif fileName == 'Outfitting.json':
+                    self.client.outfittingEvent(validatedPayload)
+                elif fileName == 'Shipyard.json':
+                    self.client.shipyardEvent(validatedPayload)
+                else:
+                    print(f"Unhandled file: {fileName}")
         except Exception as e:
             print(e)
+
+    # noinspection PyMethodMayBeStatic
+    def __validateJson(self, rawJson: str) -> str:
+        """
+        Make sure that journal event payload sent to the API is at least a valid JSON.
+        """
+        validObj = json.loads(rawJson)
+        validJson = json.dumps(validObj)
+        return validJson
 
 class JournalDirectoryObserver(Observer):
     def __init__(self):
@@ -135,7 +148,8 @@ class JournalDirectoryObserver(Observer):
         cycle = app.WATCHDOG_REFRESH_PERIOD / 1000
         print('Journal refresh thread started')
         while self.is_alive():
-            os.listdir(path=app.WATCHDOG_JOURNAL_DIRECTORY)
+            for x in os.scandir(path=app.WATCHDOG_JOURNAL_DIRECTORY):
+                os.stat(x).st_size
             time.sleep(cycle)
         print('Journal refresh thread stopped')
 
